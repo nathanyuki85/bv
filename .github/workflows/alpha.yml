@@ -50,6 +50,11 @@ jobs:
           echo ${{ secrets.SIGN_KEY }} > ./encoded_key
           base64 -Dd -i encoded_key > key.jks
 
+      - name: Debug dir info
+        run: |
+          ls -l
+          ls -l app/google-services.json
+
       - name: Build apk
         run: ./gradlew assembleDefaultAlpha assembleDefaultDebug
 
