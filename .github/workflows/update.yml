@@ -1,0 +1,100 @@
+name: Auto rebase my patch onto upstream develop
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 17 * * *"  # UTC 1700 , CST 0100
+  push:
+    branches:
+      - not-exists
+
+permissions:
+  contents: write   # 允许推送
+  issues: write     # 允许创建/评论 issue
+
+concurrency:
+  group: auto-rebase-develop
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO: aaa1115910/bv
+  UPSTREAM_BRANCH: develop
+  PATCH_BRANCH: not-exists
+  INTEGRATION_BRANCH: build/not-exists
+  BOT_NAME: rebase-bot
+  BOT_EMAIL: rebase-bot@users.noreply.github.com
+  WORK_BRANCH: __auto_rebase_work
+
+jobs:
+  rebase-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.MY_PUSH_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "${{ env.BOT_NAME }}"
+          git config user.email "${{ env.BOT_EMAIL }}"
+
+      - name: Add and fetch upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote | grep -q '^upstream$' || \
+            git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git"
+          git fetch --no-tags upstream "${{ env.UPSTREAM_BRANCH }}"
+          git fetch --no-tags origin  "${{ env.PATCH_BRANCH }}" || true
+          git fetch --no-tags origin  "${{ env.INTEGRATION_BRANCH }}" || true
+
+      - name: Decide whether rebase is needed
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          UP_HEAD=$(git rev-parse "upstream/${{ env.UPSTREAM_BRANCH }}")
+          echo "upstream_head=$UP_HEAD" >> "$GITHUB_OUTPUT"
+
+          NEEDS=1
+          # 如果集成分支已包含最新上游，且补丁分支也没新提交，就跳过
+          if git show-ref --verify --quiet "refs/remotes/origin/${{ env.INTEGRATION_BRANCH }}"; then
+            if git merge-base --is-ancestor "$UP_HEAD" "origin/${{ env.INTEGRATION_BRANCH }}"; then
+              if [ -z "$(git log --oneline "origin/${{ env.INTEGRATION_BRANCH }}".."origin/${{ env.PATCH_BRANCH }}" || true)" ]; then
+                NEEDS=0
+              fi
+            fi
+          fi
+
+          echo "should_rebase=$NEEDS" >> "$GITHUB_OUTPUT"
+          if [ "$NEEDS" -eq 0 ]; then
+            echo "No upstream changes and no new local patches; skipping."
+          fi
+
+      - name: Rebase patch branch onto upstream (with patch-queue fallback)
+        id: rebase
+        if: steps.plan.outputs.should_rebase == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          git checkout -B "${{ env.WORK_BRANCH }}" "origin/${{ env.PATCH_BRANCH }}"
+
+          # 保存补丁序列，供冲突时 fallback 使用
+          git format-patch -k --stdout "upstream/${{ env.UPSTREAM_BRANCH }}"..HEAD > /tmp/series.patch || true
+
+          # 先尝试普通 rebase（保留合并）
+          if ! git rebase --rebase-merges "upstream/${{ env.UPSTREAM_BRANCH }}"; then
+            echo "Rebase failed, trying 'git am -3' fallback…"
+            git rebase --abort || true
+            git checkout -B "${{ env.WORK_BRANCH }}" "upstream/${{ env.UPSTREAM_BRANCH }}"
+            if ! git am -3 < /tmp/series.patch; then
+              git am --abort || true
+              echo "rebase_conflict=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "rebase_conflict=false" >> "$GITHUB_OUTPUT"
