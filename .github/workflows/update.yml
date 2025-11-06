@@ -106,8 +106,6 @@ jobs:
         run: |
           set -euxo pipefail
           echo "Rebase successful, pushing changes..."
-          # 将 rebase 后的工作分支强制推送到你的补丁分支
-          git push --force-with-lease origin "${{ env.WORK_BRANCH }}:${{ env.PATCH_BRANCH }}"
           # 同样更新集成分支，为下一次运行做记录
           git push --force-with-lease origin "${{ env.WORK_BRANCH }}:${{ env.INTEGRATION_BRANCH }}"
 
