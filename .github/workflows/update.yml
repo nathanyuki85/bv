@@ -63,9 +63,7 @@ jobs:
           # 如果集成分支已包含最新上游，且补丁分支也没新提交，就跳过
           if git show-ref --verify --quiet "refs/remotes/origin/${{ env.INTEGRATION_BRANCH }}"; then
             if git merge-base --is-ancestor "$UP_HEAD" "origin/${{ env.INTEGRATION_BRANCH }}"; then
-              if [ -z "$(git log --oneline "origin/${{ env.INTEGRATION_BRANCH }}".."origin/${{ env.PATCH_BRANCH }}" || true)" ]; then
-                NEEDS=0
-              fi
+              NEEDS=0
             fi
           fi
 
